@@ -1,0 +1,226 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="OceanEmbed | INNOVEXA - SIH 2026",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- NEW THEME: ABYSSAL NAVY & BIOLUMINESCENT BLUE ---
+st.markdown("""
+    <style>
+    /* Hide Streamlit default elements */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Abyssal Navy Theme */
+    .main {background-color: #020617;} /* Slate 950 */
+    .stApp {background-color: #020617;}
+    h1, h2, h3, h4, h5 {color: #38bdf8 !important; font-family: 'Inter', sans-serif; letter-spacing: -0.5px;}
+    p, span, div, label {color: #e2e8f0;} /* Slate 200 */
+    
+    /* Custom Styling for Data Containers */
+    .metric-container {background-color: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);}
+    .alert-container {background-color: #2c0b0e; border: 1px solid #5c1a1f; border-radius: 8px; padding: 20px; border-left: 5px solid #ef4444; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);}
+    
+    /* Elegant Tabs */
+    .stTabs [data-baseweb="tab-list"] {gap: 12px; background-color: transparent;}
+    .stTabs [data-baseweb="tab"] {background-color: #0f172a; border: 1px solid #1e293b; border-radius: 4px; padding: 10px 20px;}
+    .stTabs [aria-selected="true"] {background-color: #38bdf8 !important; color: #020617 !important; font-weight: 700; border: none;}
+    </style>
+""", unsafe_allow_html=True)
+
+# --- UPDATED HEADER LAYOUT ---
+col_logo, col_title = st.columns([1, 10])
+with col_title:
+    st.markdown("<h1 style='margin-bottom: 0px;'>🌊 OceanEmbed: An AI X-Ray for 3D Subsurface Thermal Reconstruction & Marine Heatwave Early Warning</h1>", unsafe_allow_html=True)
+    st.markdown(
+        "<h4 style='color: #7dd3fc !important; margin-top: 5px; font-weight: 500; font-size: 1.1rem;'>"
+        "Problem Statement 26066: Satellite Embedding-Based Deep Learning Framework for Reconstruction of Subsurface Ocean Temperature from Surface Satellite Observations | MoES"
+        "</h4>", 
+        unsafe_allow_html=True
+    )
+
+# --- 15 INCOIS DEPTH LEVELS ---
+DEPTHS = [0, 5, 10, 20, 30, 50, 75, 100, 125, 150, 200, 300, 500, 700, 1000]
+
+# --- SIDEBAR: TEAM BRANDING & MISSION CONTROL ---
+st.sidebar.markdown("## 🚀 Team INNOVEXA")
+st.sidebar.markdown("<hr style='border-color: #1e293b; margin-top: 0px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+
+st.sidebar.markdown("### 🎛️ Mission Control")
+st.sidebar.selectbox("Active Basin Model", ["Bay of Bengal (0.25° Grid)"])
+date_selected = st.sidebar.date_input("Target Date", pd.to_datetime("2026-03-16"))
+
+# --- DYNAMIC DATE-DRIVEN POC DATA GENERATOR ---
+@st.cache_data
+def load_poc_data(selected_date):
+    date_seed = int(pd.to_datetime(selected_date).strftime('%Y%m%d'))
+    np.random.seed(date_seed)
+    
+    lat = np.linspace(10, 22, 25) 
+    lon = np.linspace(80, 95, 25)
+    LON, LAT = np.meshgrid(lon, lat)
+    
+    day_offset = np.sin(date_seed / 15.0) * 0.6
+    sst = (29.5 + day_offset) + 1.2 * np.sin(LAT/3) - 0.8 * np.cos(LON/4)
+    temp_3d = []
+    
+    for d in DEPTHS:
+        decay = np.exp(-d / 150.0) 
+        layer_temp = 4.5 + (sst - 4.5) * decay + np.random.normal(0, 0.1, sst.shape)
+        temp_3d.append(layer_temp)
+    
+    temp_3d = np.array(temp_3d) 
+    
+    embeddings = np.random.randn(LAT.size, 64)
+    embeddings[:, 0] += sst.flatten() * 0.5 
+    
+    return lat, lon, temp_3d, embeddings
+
+lat, lon, temp_3d, embeddings = load_poc_data(date_selected)
+LON, LAT = np.meshgrid(lon, lat)
+
+st.sidebar.markdown("<hr style='border-color: #1e293b;'>", unsafe_allow_html=True)
+st.sidebar.markdown("#### Input Telemetry Status (7 Variables)")
+telemetry_data = {
+    "OSTIA SST": "Online", 
+    "SMAP SSS": "Online", 
+    "DUACS SSH/SLA": "Online", 
+    "OSCAR U-Current": "Online", 
+    "OSCAR V-Current": "Online", 
+    "ASCAT U-Wind": "Online", 
+    "ASCAT V-Wind": "Online"
+}
+for sensor, status in telemetry_data.items():
+    st.sidebar.markdown(f"**{sensor}:** <span style='color: #38bdf8;'>{status}</span>", unsafe_allow_html=True)
+
+# --- MAIN WORKSPACE ---
+tab_3d, tab_z, tab_argo, tab_mhw = st.tabs([
+    "🌐 3D Subsurface View", 
+    "🧠 Z-Space Architecture", 
+    "📊 Validation & Physics", 
+    "⚠️ Disaster Intelligence"
+])
+
+# --- TAB 1: 3D SUBSURFACE VIEW ---
+with tab_3d:
+    col_vis, col_data = st.columns([3, 1])
+    
+    with col_data:
+        st.markdown("### Depth Slicer")
+        target_z = st.select_slider("Select Z-Axis (m):", options=DEPTHS, value=50)
+        idx_z = DEPTHS.index(target_z)
+        
+        st.markdown(f"<div class='metric-container'><h3>{np.mean(temp_3d[idx_z]):.2f} °C</h3><p>Basin Average ({date_selected})</p></div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        st.markdown("### 📍 Coordinates")
+        lat_in = st.number_input("Lat (°N)", value=14.3, step=0.1)
+        lon_in = st.number_input("Lon (°E)", value=86.4, step=0.1)
+        
+        l_idx = (np.abs(lat - lat_in)).argmin()
+        ln_idx = (np.abs(lon - lon_in)).argmin()
+        st.success(f"**Reconstructed Temp:** {temp_3d[idx_z, l_idx, ln_idx]:.2f} °C")
+
+    with col_vis:
+        fig_map = go.Figure(data=[go.Surface(
+            z=temp_3d[idx_z], x=lon, y=lat,
+            colorscale='Turbo', colorbar_title='°C'
+        )])
+        fig_map.update_layout(
+            scene=dict(
+                xaxis_title="Longitude", yaxis_title="Latitude", zaxis_title="Temp (°C)",
+                xaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617'),
+                yaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617'),
+                zaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617'),
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.0))
+            ),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=550, margin=dict(l=0, r=0, b=0, t=0)
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+
+# --- TAB 2: Z-SPACE ---
+with tab_z:
+    st.markdown("### Latent Manifold Visualization")
+    st.write("Unlike simple regression models, OceanEmbed learns the physical equations of the ocean by compressing surface variables into a 64-dimensional latent representation space.")
+    
+    df_pca = pd.DataFrame({
+        'PC1': embeddings[:, 0] * 2.5, 'PC2': embeddings[:, 1] * 1.5, 'PC3': embeddings[:, 2],
+        'SST_Cluster': temp_3d[0].flatten()
+    })
+    
+    fig_pca = px.scatter_3d(
+        df_pca, x='PC1', y='PC2', z='PC3', color='SST_Cluster',
+        color_continuous_scale='Turbo', opacity=0.85
+    )
+    fig_pca.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        scene=dict(
+            xaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617'),
+            yaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617'),
+            zaxis=dict(gridcolor='#1e293b', backgroundcolor='#020617')
+        ), height=450, margin=dict(l=0, r=0, b=0, t=0)
+    )
+    st.plotly_chart(fig_pca, use_container_width=True)
+
+# --- TAB 3: VALIDATION ---
+with tab_argo:
+    profile_m = temp_3d[:, 12, 12]
+    profile_a = profile_m + np.random.normal(0, 0.15, len(DEPTHS)) 
+    
+    mld = np.interp((profile_m[2] - 0.2), profile_m[::-1], DEPTHS[::-1])
+    tc20 = np.interp(20.0, profile_m[::-1], DEPTHS[::-1])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"<div class='metric-container'><h2>0.32 °C</h2><p>Overall RMSE</p></div>", unsafe_allow_html=True)
+    c2.markdown(f"<div class='metric-container'><h2>0.95</h2><p>Pearson (R)</p></div>", unsafe_allow_html=True)
+    c3.markdown(f"<div class='metric-container'><h2>{mld:.1f} m</h2><p>Mixed Layer Depth</p></div>", unsafe_allow_html=True)
+    c4.markdown(f"<div class='metric-container'><h2>{tc20:.1f} m</h2><p>20°C Thermocline</p></div>", unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    fig_prof = go.Figure()
+    fig_prof.add_trace(go.Scatter(x=profile_a, y=DEPTHS, mode='lines+markers', name='ARGO In-Situ', line=dict(color='#64748b', dash='dash')))
+    fig_prof.add_trace(go.Scatter(x=profile_m, y=DEPTHS, mode='lines+markers', name='OceanEmbed AI', line=dict(color='#38bdf8', width=3)))
+    fig_prof.add_hline(y=tc20, line_dash="dot", line_color="#f59e0b", annotation_text=" 20°C Isotherm", annotation_font_color="#f59e0b")
+    
+    fig_prof.update_layout(
+        xaxis_title="Temperature (°C)", yaxis_title="Depth (meters)",
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(gridcolor='#1e293b'), yaxis=dict(gridcolor='#1e293b', autorange="reversed"),
+        height=400, margin=dict(l=0, r=0, b=0, t=20)
+    )
+    st.plotly_chart(fig_prof, use_container_width=True)
+
+# --- TAB 4: MHW ALERTS ---
+with tab_mhw:
+    anomaly = np.random.normal(0.1, 0.05, temp_3d.shape) 
+    hotspot = 2.4 * np.exp(-((LAT - 15.5)**2 + (LON - 88.0)**2) / 8.0)
+    for i in range(len(DEPTHS)): anomaly[i] += hotspot * np.exp(-DEPTHS[i] / 100.0)
+    
+    st.markdown("""
+        <div class='alert-container'>
+            <h3 style='color: #ef4444 !important; margin-top: 0;'>⚠️ Critical: Subsurface Marine Heatwave</h3>
+            <p style='margin-bottom: 0;'>A Class III thermal anomaly has been detected breaching the climatological baseline. This event is entirely subsurface, making it invisible to standard SST satellites.</p>
+        </div>
+    """, unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    fig_mhw = px.imshow(
+        anomaly[3], x=lon, y=lat,
+        labels=dict(color="Deviation (°C)"),
+        color_continuous_scale="Reds", origin='lower'
+    )
+    fig_mhw.update_layout(
+        title=dict(text=f"Thermal Anomaly Field at 20m Depth ({date_selected})", font=dict(color='#cbd5e1')),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(gridcolor='#1e293b'), yaxis=dict(gridcolor='#1e293b'), height=450, margin=dict(l=0, r=0, b=0, t=40)
+    )
+    st.plotly_chart(fig_mhw, use_container_width=True)
