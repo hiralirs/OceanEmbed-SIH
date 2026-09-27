@@ -1,38 +1,71 @@
-import xarray as xr
 import numpy as np
-import torch
+import xarray as xr
+import os
 
-# Geographic boundaries specified by MoES PS 26066
-LAT_MIN, LAT_MAX = 5.0, 30.0
-LON_MIN, LON_MAX = 45.0, 105.0
+# Define Bounding Box & Paths
+DATA_DIR = "data"
+OUTPUT_DIR = "data/processed"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def load_and_preprocess_surface(nc_file_path):
-    """
-    Ingests daily satellite NetCDF file, crops to Indian Ocean,
-    handles NaNs over land, and stacks 5 surface variables into a tensor.
-    """
-    ds = xr.open_dataset(nc_file_path)
+def normalize(array):
+    """Applies Min-Max normalization, scaling values between 0 and 1."""
+    min_val = np.nanmin(array)
+    max_val = np.nanmax(array)
+    if max_val == min_val:
+        return np.zeros_like(array)
+    return (array - min_val) / (max_val - min_val)
+
+def load_and_preprocess():
+    print("Loading NetCDF sample files...")
     
-    # Subset geography
-    cropped = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
+    # Load individual datasets
+    ds_temp = xr.open_dataset(os.path.join(DATA_DIR, "temp_sample.nc"))
+    ds_sal = xr.open_dataset(os.path.join(DATA_DIR, "salinity_sample.nc"))
+    ds_curr = xr.open_dataset(os.path.join(DATA_DIR, "currents_sample.nc"))
+    ds_ssh = xr.open_dataset(os.path.join(DATA_DIR, "sealevel_sample.nc"))
+    ds_wind = xr.open_dataset(os.path.join(DATA_DIR, "wind_sample.nc"))
+    ds_target = xr.open_dataset(os.path.join(DATA_DIR, "glorys_sample.nc"))
+
+    print("Extracting and dynamically regridding arrays...")
     
-    # Extract surface variables (SST, SSS, SLA, U-wind/curr, V-wind/curr)
-    sst = np.nan_to_num(cropped['sst'].values, nan=0.0)
-    sss = np.nan_to_num(cropped['sss'].values, nan=0.0)
-    sla = np.nan_to_num(cropped['sla'].values, nan=0.0)
-    u_curr = np.nan_to_num(cropped['u'].values, nan=0.0)
-    v_curr = np.nan_to_num(cropped['v'].values, nan=0.0)
+    # These four are already perfectly aligned
+    sst = ds_temp['thetao'].values
+    sal = ds_sal['so'].values
+    u_curr = ds_curr['uo'].values
+    v_curr = ds_curr['vo'].values
     
-    # Stack into 5-channel array -> Shape: (5, H, W)
-    stacked = np.stack([sst, sss, sla, u_curr, v_curr], axis=0)
+    # SSH is hourly. We use interp_like() to automatically resample it to daily, matching the temp file.
+    ssh = ds_ssh['total_sea_level'].interp_like(ds_temp).values
     
-    # Channel-wise Min-Max Normalization
-    for c in range(5):
-        c_min, c_max = stacked[c].min(), stacked[c].max()
-        if c_max > c_min:
-            stacked[c] = (stacked[c] - c_min) / (c_max - c_min)
-            
-    # Convert to 4D Tensor -> Shape: (1, 5, H, W)
-    tensor = torch.tensor(stacked, dtype=torch.float32).unsqueeze(0)
+    # Wind is hourly AND a different grid resolution. interp_like() fixes both instantly.
+    u_wind_raw = ds_wind['eastward_wind'].interp_like(ds_temp).values
+    v_wind_raw = ds_wind['northward_wind'].interp_like(ds_temp).values
     
-    return tensor, cropped.lat.values, cropped.lon.values
+    # Wind is also missing the 'depth' dimension, so we add a dummy dimension using np.expand_dims
+    u_wind = np.expand_dims(u_wind_raw, axis=1)
+    v_wind = np.expand_dims(v_wind_raw, axis=1)
+    
+    # Target variable
+    target_thetao = ds_target['bottomT'].values
+
+    print("Stacking features, masking landmass NaNs, and normalizing...")
+    # Stack the 7 surface inputs into one array along the channel axis (Time, Channels, Lat, Lon)
+    input_features = np.stack([sst, sal, u_curr, v_curr, ssh, u_wind, v_wind], axis=1)
+
+    # Convert landmass NaNs to 0.0 so they don't break the neural network
+    input_features = np.nan_to_num(input_features, nan=0.0)
+    target_thetao = np.nan_to_num(target_thetao, nan=0.0)
+
+    # Normalize inputs for stable deep learning training
+    input_features_norm = normalize(input_features)
+    target_thetao_norm = normalize(target_thetao)
+
+    print("Saving processed tensors...")
+    # Export as clean NumPy arrays
+    np.save(os.path.join(OUTPUT_DIR, "X_inputs.npy"), input_features_norm)
+    np.save(os.path.join(OUTPUT_DIR, "Y_target.npy"), target_thetao_norm)
+    
+    print(f"Success! Saved X_inputs {input_features_norm.shape} and Y_target {target_thetao_norm.shape} to {OUTPUT_DIR}/")
+
+if __name__ == "__main__":
+    load_and_preprocess()
