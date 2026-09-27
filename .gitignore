@@ -1,0 +1,19 @@
+# Python caches & virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Raw and Processed Data
+*.nc
+*.npy
+*.csv
+
+# PyTorch Model Weights
+*.pt
+*.pth
+
+# IDE and Notebook caches
+.ipynb_checkpoints/
+.vscode/
