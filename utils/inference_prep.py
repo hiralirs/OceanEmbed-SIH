@@ -1,74 +1,82 @@
+import os
 import numpy as np
 import xarray as xr
-import os
 
 DATA_DIR = "data"
 
+
 def normalize(array):
-    """Applies Min-Max normalization, scaling values between 0 and 1."""
-    min_val = np.nanmin(array)
-    max_val = np.nanmax(array)
-    if max_val == min_val:
-        return np.zeros_like(array)
-    return (array - min_val) / (max_val - min_val)
+  """Applies Min-Max normalization, scaling values between 0 and 1."""
+  min_val = np.nanmin(array)
+  max_val = np.nanmax(array)
+  if max_val == min_val:
+    return np.zeros_like(array)
+  return (array - min_val) / (max_val - min_val)
+
 
 def get_inference_tensor(date_str):
-    """
-    Loads NetCDF datasets, aligns and regrids them at the xarray level,
-    and returns a single inference tensor of shape (1, 7, 1, 301, 720).
-    """
-    # Load individual datasets
-    ds_temp = xr.open_dataset(os.path.join(DATA_DIR, "temp_sample.nc"))
-    ds_sal = xr.open_dataset(os.path.join(DATA_DIR, "salinity_sample.nc"))
-    ds_curr = xr.open_dataset(os.path.join(DATA_DIR, "currents_sample.nc"))
-    ds_ssh = xr.open_dataset(os.path.join(DATA_DIR, "sealevel_sample.nc"))
-    ds_wind = xr.open_dataset(os.path.join(DATA_DIR, "wind_sample.nc"))
+  """Loads NetCDF datasets, aligns them to the 0.25 deg SIH resolution,
 
-    # Establish the master reference grid using temperature
-    temp = ds_temp['thetao']
-    
-    # Align and regrid all datasets to match the temp grid structure directly
-    sal = ds_sal['so'].interp_like(temp)
-    curr_u = ds_curr['uo'].interp_like(temp)
-    curr_v = ds_curr['vo'].interp_like(temp)
-    ssh = ds_ssh['total_sea_level'].interp_like(temp)
-    wind_u = ds_wind['eastward_wind'].interp_like(temp)
-    wind_v = ds_wind['northward_wind'].interp_like(temp)
+  and returns an inference tensor of shape (1, 7, 101, 241).
+  """
+  ds_temp = xr.open_dataset(os.path.join(DATA_DIR, "temp_sample.nc"))
+  ds_sal = xr.open_dataset(os.path.join(DATA_DIR, "salinity_sample.nc"))
+  ds_curr = xr.open_dataset(os.path.join(DATA_DIR, "currents_sample.nc"))
+  ds_ssh = xr.open_dataset(os.path.join(DATA_DIR, "sealevel_sample.nc"))
+  ds_wind = xr.open_dataset(os.path.join(DATA_DIR, "wind_sample.nc"))
 
-    # Extract the first time index cleanly (or slice by date safely)
-    sub_temp = temp.isel(time=0).values
-    sub_sal = sal.isel(time=0).values
-    sub_curr_u = curr_u.isel(time=0).values
-    sub_curr_v = curr_v.isel(time=0).values
-    sub_ssh = ssh.isel(time=0).values
-    sub_wind_u = wind_u.isel(time=0).values
-    sub_wind_v = wind_v.isel(time=0).values
+  # Define the official 0.25 degree grid
+  new_lat = np.arange(5.0, 30.25, 0.25)
+  new_lon = np.arange(45.0, 105.25, 0.25)
 
-    # Helper to guarantee every array has a depth dimension: (1, Lat, Lon)
-    def ensure_3d(arr):
-        arr = np.squeeze(arr)
-        if arr.ndim == 2:
-            arr = np.expand_dims(arr, axis=0)
-        return arr
+  # Establish master reference grid using temperature
+  temp_master = ds_temp["thetao"].interp(latitude=new_lat, longitude=new_lon)
 
-    arrays = [
-        ensure_3d(sub_temp),
-        ensure_3d(sub_sal),
-        ensure_3d(sub_curr_u),
-        ensure_3d(sub_curr_v),
-        ensure_3d(sub_ssh),
-        ensure_3d(sub_wind_u),
-        ensure_3d(sub_wind_v)
-    ]
+  # Align and regrid all datasets using interp_like to handle differing coordinate names
+  sal_regridded = ds_sal["so"].interp_like(temp_master)
+  curr_u_regridded = ds_curr["uo"].interp_like(temp_master)
+  curr_v_regridded = ds_curr["vo"].interp_like(temp_master)
+  ssh_regridded = ds_ssh["total_sea_level"].interp_like(temp_master)
+  wind_u_regridded = ds_wind["eastward_wind"].interp_like(temp_master)
+  wind_v_regridded = ds_wind["northward_wind"].interp_like(temp_master)
 
-    # Stack channels -> (Channels, Depth, Lat, Lon)
-    input_features = np.stack(arrays, axis=0)
+  # Extract the slice safely
+  try:
+    sub_temp = temp_master.sel(time=date_str)
+    sub_sal = sal_regridded.sel(time=date_str)
+    sub_curr_u = curr_u_regridded.sel(time=date_str)
+    sub_curr_v = curr_v_regridded.sel(time=date_str)
+    sub_ssh = ssh_regridded.sel(time=date_str)
+    sub_wind_u = wind_u_regridded.sel(time=date_str)
+    sub_wind_v = wind_v_regridded.sel(time=date_str)
+  except Exception:
+    sub_temp = temp_master.isel(time=0)
+    sub_sal = sal_regridded.isel(time=0)
+    sub_curr_u = curr_u_regridded.isel(time=0)
+    sub_curr_v = curr_v_regridded.isel(time=0)
+    sub_ssh = ssh_regridded.isel(time=0)
+    sub_wind_u = wind_u_regridded.isel(time=0)
+    sub_wind_v = wind_v_regridded.isel(time=0)
 
-    # Convert landmass NaNs to 0.0 and normalize
-    input_features = np.nan_to_num(input_features, nan=0.0)
-    input_features_norm = normalize(input_features)
+  def ensure_2d(da):
+    return np.squeeze(da.values)
 
-    # Add batch dimension -> (1, 7, 1, 301, 720)
-    inference_tensor = np.expand_dims(input_features_norm, axis=0)
-    
-    return inference_tensor
+  arrays = [
+      ensure_2d(sub_temp),
+      ensure_2d(sub_sal),
+      ensure_2d(sub_curr_u),
+      ensure_2d(sub_curr_v),
+      ensure_2d(sub_ssh),
+      ensure_2d(sub_wind_u),
+      ensure_2d(sub_wind_v),
+  ]
+
+  # Stack channels -> (Channels, Lat, Lon)
+  input_features = np.stack(arrays, axis=0)
+
+  # Clean and normalize
+  input_features = np.nan_to_num(input_features, nan=0.0)
+  input_features_norm = normalize(input_features)
+
+  # Add batch dimension -> (1, 7, 101, 241)
+  return np.expand_dims(input_features_norm, axis=0)

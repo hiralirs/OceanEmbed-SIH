@@ -26,31 +26,51 @@ def load_and_preprocess():
     ds_wind = xr.open_dataset(os.path.join(DATA_DIR, "wind_sample.nc"))
     ds_target = xr.open_dataset(os.path.join(DATA_DIR, "glorys_sample.nc"))
 
-    print("Extracting and dynamically regridding arrays...")
+    print("Regridding to official 0.25 degree SIH resolution...")
+    # Define the official 0.25 degree grid for the North Indian Ocean region
+    new_lat = np.arange(5.0, 30.25, 0.25)
+    new_lon = np.arange(45.0, 105.25, 0.25)
     
-    # These four are already perfectly aligned
-    sst = ds_temp['thetao'].values
-    sal = ds_sal['so'].values
-    u_curr = ds_curr['uo'].values
-    v_curr = ds_curr['vo'].values
+    # Establish a new master grid using the correct 'latitude' and 'longitude' names
+    master_grid = ds_temp.interp(latitude=new_lat, longitude=new_lon)
     
-    # SSH is hourly. We use interp_like() to automatically resample it to daily, matching the temp file.
-    ssh = ds_ssh['total_sea_level'].interp_like(ds_temp).values
+    sst = master_grid['thetao'].values
+    sal = ds_sal['so'].interp_like(master_grid).values
+    u_curr = ds_curr['uo'].interp_like(master_grid).values
+    v_curr = ds_curr['vo'].interp_like(master_grid).values
+    ssh = ds_ssh['total_sea_level'].interp_like(master_grid).values
     
-    # Wind is hourly AND a different grid resolution. interp_like() fixes both instantly.
-    u_wind_raw = ds_wind['eastward_wind'].interp_like(ds_temp).values
-    v_wind_raw = ds_wind['northward_wind'].interp_like(ds_temp).values
+    u_wind_raw = ds_wind['eastward_wind'].interp_like(master_grid).values
+    v_wind_raw = ds_wind['northward_wind'].interp_like(master_grid).values
+
+    def fix_shape(arr):
+        arr = np.squeeze(arr)
+        if arr.ndim == 2: # Shape: (Lat, Lon)
+            arr = np.expand_dims(arr, axis=0) # Shape: (1, Lat, Lon)
+        elif arr.ndim == 3: # Shape: (Time, Lat, Lon)
+            pass
+        return arr
+
+    arrays = [
+        fix_shape(sst), fix_shape(sal), fix_shape(u_curr), 
+        fix_shape(v_curr), fix_shape(ssh), fix_shape(u_wind_raw), fix_shape(v_wind_raw)
+    ]
+
+    print("Extracting target depths...")
+    target_regridded = ds_target.interp(latitude=new_lat, longitude=new_lon)
     
-    # Wind is also missing the 'depth' dimension, so we add a dummy dimension using np.expand_dims
-    u_wind = np.expand_dims(u_wind_raw, axis=1)
-    v_wind = np.expand_dims(v_wind_raw, axis=1)
-    
-    # Target variable
-    target_thetao = ds_target['bottomT'].values
+    # Safely handle the depth extraction depending on what is currently in the file
+    target_var = 'thetao' if 'thetao' in target_regridded else 'bottomT'
+    if target_regridded.dims.get('depth', 1) > 1:
+        target_depths = [0, 5, 10, 20, 30, 50, 75, 100, 125, 150, 200, 300, 500, 700, 1000]
+        target_thetao = target_regridded[target_var].sel(depth=target_depths, method='nearest').values
+    else:
+        print("WARNING: glorys_sample.nc only contains 1 depth layer. Proceeding with 1 layer.")
+        target_thetao = target_regridded[target_var].values
 
     print("Stacking features, masking landmass NaNs, and normalizing...")
-    # Stack the 7 surface inputs into one array along the channel axis (Time, Channels, Lat, Lon)
-    input_features = np.stack([sst, sal, u_curr, v_curr, ssh, u_wind, v_wind], axis=1)
+    # Stack the 7 surface inputs into one array along the channel axis -> (Time, Channels, Lat, Lon)
+    input_features = np.stack(arrays, axis=1)
 
     # Convert landmass NaNs to 0.0 so they don't break the neural network
     input_features = np.nan_to_num(input_features, nan=0.0)
