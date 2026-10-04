@@ -40,16 +40,21 @@ OceanEmbed bridges this critical observational data gap by deploying a **2D Spat
 ## ⚙️ How to Run Locally
 
 1. **Clone the repository:**
-   `git clone [https://github.com/hiralirs/OceanEmbed-SIH.git](https://github.com/hiralirs/OceanEmbed-SIH.git)`
-   `cd OceanEmbed-SIH`
+   ```bash
+   git clone https://github.com/hiralirs/OceanEmbed-SIH.git
+   cd OceanEmbed-SIH
+   ```
 
 2. **Install dependencies:**
-   `pip install -r requirements.txt`
+   ```bash
+   pip install -r requirements.txt
+   ````
 
 3. **Launch the Streamlit dashboard:**
-   `streamlit run app.py`
+   ```bash
+   streamlit run app.py
+   ```
 
----
 
 ## 🛡️ PoC Data Notice & Validation Architecture
 *For this demonstration and prototype evaluation, a modular data abstraction layer is utilized. While the production-ready architecture is configured to ingest live NetCDF telemetry streams directly from INCOIS OPeNDAP servers, the PoC environment uses a rigorous statistical simulation conforming to real-world ARGO float structures to validate the error-calculation and anomaly-flagging pipeline instantly without network latency bottlenecks.*
